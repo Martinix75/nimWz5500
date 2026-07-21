@@ -35,7 +35,7 @@ type
     clientPort: uint16 #memorizza la porta del client.
 
 const
-  W5500Version*   = "0.3.1" #restet manuale
+  W5500Version*   = "0.3.2" #restet manuale
   SOCK_STREAM*    = wz_Sn_MR_TCP #alias TCP per compattibilita BSD socket.
   SOCK_DGRAM*     = wz_Sn_MR_UDP #alias UDP per compattibilità BSD socket.
   MAX_SOCK_NUM*   = 8.uint8 #numero massimo di socket contemporanei.
@@ -63,7 +63,8 @@ proc getSn_SR*(sn: uint8): uint8
 proc setSocket*(eth: var EthCom) #setta il sochet da usare UDP o TCP.
 proc socketStatus*(eth: EthCom): uint8 #alias NIM per decretare la connessione corrente del socket ver 0.2.0.
 proc rxBytesAvailable*(eth: EthCom): uint16 #alias NIM per il ritorno dei byte disponibili nel buffer RX del soket ver 0.2.0
-proc w5500Reset*(eth: var EthCom) #reset software per resettare manualmente il w5500 ver 0.3.0.
+proc w5500Reset*(eth: var EthCom) #reset software per resettare manualmente il w5500 ver 0.3.0
+proc dataToString*(eth: EthCom; data: int32): string  #utilità per la conversione dati grezzi in stringhe ver 0.3.2 .
 # ----------- Fine Prototipi di Procedura ----------
 
 # ---------- Inizio Procedure Reali ----------
@@ -264,9 +265,17 @@ proc rxBytesAvailable*(eth: EthCom): uint16 =
   ## Ritorna il numero di byte disponibili nel buffer RX della socket.
   ## 0 = niente da leggere. Utile per evitare letture bloccanti.
   result = wz_getSn_RX_RSR(eth.socket)
+
+proc dataToString*(eth: EthCom; data: int32): string =
+  var message = newString(data) #chre uan ustringa da riempire...
+  for datax in 0..<data:
+    message[datax] = eth.rxBuffer[datax.int].char #converte in char e memoriza il carattere.
+  result = message.strip() #pulisce la stringa da sporcizzia.
+  
   
   # ---------- Fine Procedure Reali ----------
 when isMainModule:
+  import std/strformat
   # ===========================================================================
   # Esempio TCP server — risponde a comandi e chiude la connessione
   # Test da PC: nc 192.168.0.130 5000
@@ -277,7 +286,7 @@ when isMainModule:
 
   discard stdioInitAll()
   sleepMs(2000)
-  echo "=== W5500 TCP Server v0.2.0 ==="
+  echo fmt"=== W5500 TCP Server ver {W5500Version} ==="
 
   # Init con TCP sulla porta 5000 — tutto in una riga!
   var eth = w5500Init(spi1, 1_000_000.cuint,
@@ -313,12 +322,13 @@ when isMainModule:
       rxLen = recvDataEth(eth, eth.socket)
       sleepMs(10)
 
-    # Converti buffer in stringa
+    #[ Converti buffer in stringa
     var msg = newString(rxLen)
     for i in 0..<rxLen:
       msg[i] = eth.rxBuffer[i.int].char
     msg = msg.strip()
-    echo "Ricevuto: \"", msg, "\""
+    echo "Ricevuto: \"", msg, "\""]#
+    var msg = eth.dataToString(rxLen)
 
     # Seleziona risposta
     let risposta =
