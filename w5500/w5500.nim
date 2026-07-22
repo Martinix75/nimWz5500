@@ -33,9 +33,13 @@ type
     rxBuffer*: array[64, uint8] #crea un buffer per memorizzare i dati
     clientIp: array[4, uint8] #buffer x memorizzare ip del Client.
     clientPort: uint16 #memorizza la porta del client.
+    mac*: array[6, uint8] = [0xDE'u8, 0xAD, 0xBE, 0xEF, 0xFE, 0x01] #memorizza ll'indirizzo MAC ver 0.3.4
+    ip*: array[4, uint8] = [192'u8, 168, 0, 1] #memorizza l'inrizzo IP ver 0.3.4 .
+    sn*: array[4, uint8] = [255'u8, 255, 255, 0]#memorizza la maschera di rete ver 0.3.4 .
+    gw*: array[4, uint8] = [192'u8, 168, 0, 1] #memorizza il gateway ver 0.3.4 .
 
 const
-  W5500Version*   = "0.3.2" #restet manuale
+  W5500Version*   = "0.3.4" # modifica oggetto.
   SOCK_STREAM*    = wz_Sn_MR_TCP #alias TCP per compattibilita BSD socket.
   SOCK_DGRAM*     = wz_Sn_MR_UDP #alias UDP per compattibilità BSD socket.
   MAX_SOCK_NUM*   = 8.uint8 #numero massimo di socket contemporanei.
@@ -53,8 +57,9 @@ proc w5500SpiReadBurst(buf: ptr uint8; len: uint16) {.cdecl.} #legge "len" byte 
 proc w5500SpiWriteBurst(buf: ptr uint8; len: uint16) {.cdecl.} #scrive "len" byte su SPI in modalità brust.
 proc w5500CsSelect() {.cdecl.} #abbassa il pin CS (attivo basso) per selezionare il dispositivo w5500 su SPI.
 proc w5500CsDeselect() {.cdecl.} #Alza il pin CS per deselezionare il w5500 dal SPI.
-proc w5500ReadVersionRaw*(spi: ptr SpiInst; pinCs: Gpio): uint8 #legge il registo versione interno da spi (senza libreria wznet).
-proc w5500HardReset*(spi: ptr SpiInst; pinCs: Gpio) #soft reser per w5500 senza pin fidico.
+#proc w5500ReadVersionRaw*(spi: ptr SpiInst; pinCs: Gpio): uint8 #legge il registo versione interno da spi (senza libreria wznet).
+proc w5500ReadVersionRaw*(eth: EthCom): uint8
+proc w5500HardReset*(eth: EthCom) #soft reser per w5500 senza pin fidico.
 proc w5500Init*(spi: ptr SpiInst; baudrate: cuint; pinSck, pinMosi, pinMiso, pinCs: Gpio; 
                 protocol: EthProtocol; port: uint16; socket: uint8=0; pinRst: GpioOptional = GpioUnused): EthCom #inizializza porta SPI e chip w5500.
 proc sendDataEth*(eth: var EthCom; txBuffer: string; socket: uint8 = 0): int32 #proc nim semplificata per pedire dati ver 0.2.0
@@ -65,6 +70,7 @@ proc socketStatus*(eth: EthCom): uint8 #alias NIM per decretare la connessione c
 proc rxBytesAvailable*(eth: EthCom): uint16 #alias NIM per il ritorno dei byte disponibili nel buffer RX del soket ver 0.2.0
 proc w5500Reset*(eth: var EthCom) #reset software per resettare manualmente il w5500 ver 0.3.0
 proc dataToString*(eth: EthCom; data: int32): string  #utilità per la conversione dati grezzi in stringhe ver 0.3.2 .
+proc w5500SetNetInfo*(eth: var EthCom)
 # ----------- Fine Prototipi di Procedura ----------
 
 # ---------- Inizio Procedure Reali ----------
@@ -97,7 +103,21 @@ proc w5500CsDeselect() =
   ## Alza il pin CS per deselezionare il W5500 e liberare il bus SPI.
   comPinCs.put(High)
 
-proc w5500ReadVersionRaw*(spi: ptr SpiInst; pinCs: Gpio): uint8 =
+proc w5500ReadVersionRaw*(eth: EthCom): uint8 =
+  ## Legge il registro versione W5500 direttamente via SPI (senza libreria WIZnet).
+  ## Risposta attesa: 0x04
+  ## Se restituisce 0x00 o altro: verificare cablaggio e alimentazione (3.3V).
+  eth.pinCs.put(Low)                                        # seleziona chip
+  sleepMs(1)
+  var tx = [0x00.uint8, 0x39, 0x00]                       # indirizzo + control byte
+  discard eth.spi.writeBlocking(tx[0].addr, 3.csize_t)     # invia header
+  var rx: uint8 = 0
+  discard eth.spi.readBlocking(0xFF.uint8, rx.addr, 1.csize_t) # leggi risposta
+  sleepMs(1)
+  eth.pinCs.put(High)                                       # deseleziona chip
+  result = rx
+
+#[proc w5500ReadVersionRaw*(spi: ptr SpiInst; pinCs: Gpio): uint8 =
   ## Legge il registro versione W5500 direttamente via SPI (senza libreria WIZnet).
   ## Risposta attesa: 0x04
   ## Se restituisce 0x00 o altro: verificare cablaggio e alimentazione (3.3V).
@@ -109,7 +129,7 @@ proc w5500ReadVersionRaw*(spi: ptr SpiInst; pinCs: Gpio): uint8 =
   discard spi.readBlocking(0xFF.uint8, rx.addr, 1.csize_t) # leggi risposta
   sleepMs(1)
   pinCs.put(High)                                       # deseleziona chip
-  result = rx
+  result = rx]#
 
 proc w5500Reset*(eth: var EthCom) =
   ## Esegue un reset hardware del W5500 tramite il pin RST fisico.
@@ -129,15 +149,15 @@ proc w5500Reset*(eth: var EthCom) =
   else:
     echo "W5500 reset: pin RST non specificato, niente da fare."
     
-proc w5500HardReset*(spi: ptr SpiInst; pinCs: Gpio) =
+proc w5500HardReset*(eth: EthCom) =
   ## Soft reset del W5500 via registro MR (indirizzo 0x0000, bit 7 = RST).
   ## Equivale a un reset hardware senza il pin RST fisico.
-  pinCs.put(Low)
+  eth.pinCs.put(Low)
   sleepMs(1)
   # Frame: addr_hi=0x00, addr_lo=0x00, control=0x04 (write, common reg, 1-byte), data=0x80
   var tx = [0x00.uint8, 0x00, 0x04, 0x80]
-  discard spi.writeBlocking(tx[0].addr, 4.csize_t)
-  pinCs.put(High)
+  discard eth.spi.writeBlocking(tx[0].addr, 4.csize_t)
+  eth.pinCs.put(High)
   sleepMs(200)  # attesa reset completo (datasheet dice 1ms, mettiamo 200 per sicurezza)
 
 proc w5500Init*(spi: ptr SpiInst; baudrate: cuint; pinSck, pinMosi, pinMiso, pinCs: Gpio; 
@@ -187,31 +207,15 @@ proc setSocket*(eth: var EthCom) =
       discard wz_socket_proc(eth.socket, wz_Sn_MR_TCP, eth.port, 0)
       discard wz_listen(eth.socket)
       
-proc w5500SetNetInfo*(mac: array[6, uint8];
-                      ip:  array[4, uint8];
-                      sn:  array[4, uint8];
-                      gw:  array[4, uint8]) =
-  ## Configura i parametri di rete con indirizzo IP statico.
-  ##
-  ## Parametri:
-  ##   mac — indirizzo MAC (6 byte) — deve essere unico nella rete locale
-  ##   ip  — indirizzo IPv4 statico (4 byte)
-  ##   sn  — subnet mask (4 byte)
-  ##   gw  — indirizzo gateway (4 byte)
-  ##
-  ## Esempio:
-  ##   w5500SetNetInfo(
-  ##     mac = [0xDE'u8, 0xAD, 0xBE, 0xEF, 0xFE, 0x01],
-  ##     ip  = [192'u8, 168, 0, 130],
-  ##     sn  = [255'u8, 255, 255, 0],
-  ##     gw  = [192'u8, 168, 0, 1]
-  ##   )
+proc w5500SetNetInfo*(eth: var EthCom) =
+  ## Applica la configurazione di rete memorizzata nell'oggetto EthCom.
+  ## Imposta eth.mac, eth.ip, eth.sn, eth.gw prima di chiamarla.
   var info: wz_wiz_NetInfo
-  info.wz_mac  = mac
-  info.wz_ip   = ip
-  info.wz_sn   = sn
-  info.wz_gw   = gw
-  info.wz_dhcp = wz_NETINFO_STATIC  # modalità IP statico (no DHCP)
+  info.wz_mac  = eth.mac
+  info.wz_ip   = eth.ip
+  info.wz_sn   = eth.sn
+  info.wz_gw   = eth.gw
+  info.wz_dhcp = wz_NETINFO_STATIC
   wz_wizchip_setnetinfo(info.addr)
   
   
@@ -276,73 +280,65 @@ proc dataToString*(eth: EthCom; data: int32): string =
   # ---------- Fine Procedure Reali ----------
 when isMainModule:
   import std/strformat
+
   # ===========================================================================
-  # Esempio TCP server — risponde a comandi e chiude la connessione
-  # Test da PC: nc 192.168.0.130 5000
-  # Digita: ciao  → risponde "buongiorno!" e chiude
-  #         stato → risponde "tutto ok" e chiude
-  #         altro → risponde "comando non riconosciuto" e chiude
+  # Esempio TCP server v0.3.4 — API OOP completa
+  # Test da PC: nc -w5 192.168.0.140 5000
+  # Comandi: ciao → buongiorno!  |  stato → tutto ok  |  altro → non riconosciuto
   # ===========================================================================
 
   discard stdioInitAll()
   sleepMs(2000)
   echo fmt"=== W5500 TCP Server ver {W5500Version} ==="
 
-  # Init con TCP sulla porta 5000 — tutto in una riga!
-  var eth = w5500Init(spi1, 1_000_000.cuint,
-                      10.Gpio, 11.Gpio, 12.Gpio, 13.Gpio,
+  # Init chip — usa i default dell'oggetto per la rete
+  var eth = w5500Init(spi0, 1_000_000.cuint,
+                      2.Gpio, 3.Gpio, 4.Gpio, 5.Gpio,
                       Mode_TCP, 5000)
 
-  let ver = w5500ReadVersionRaw(spi1, 13.Gpio)
+  # Verifica SPI fisica
+  let ver = eth.w5500ReadVersionRaw()
   echo "W5500 version: 0x", ver.toHex()
   if ver != W5500_VERSIONR:
-    echo "ERRORE SPI! Fermo."
+    echo "ERRORE SPI! Verificare cablaggio (3.3V). Fermo."
     while true: sleepMs(1000)
   echo "SPI OK."
 
-  w5500SetNetInfo(
-    mac = [0xDE'u8, 0xAD, 0xBE, 0xEF, 0xFE, 0x01],
-    ip  = [192'u8, 168, 0, 130],
-    sn  = [255'u8, 255, 255, 0],
-    gw  = [192'u8, 168, 0, 1]
-  )
-  echo "Rete: 192.168.0.130"
+  # Configura rete — modifica solo i campi che vuoi cambiare
+  # eth.mac è già [0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x01] per default
+  # eth.sn  è già [255, 255, 255, 0] per default
+  eth.ip = [192'u8, 168, 0, 140]  # cambio IP da default 0.1 a 0.140
+  eth.gw = [192'u8, 168, 0, 1]
+  eth.w5500SetNetInfo() # applica la configurazione sualo SEMPRE!!
+  echo fmt"Rete: {eth.ip[0]}.{eth.ip[1]}.{eth.ip[2]}.{eth.ip[3]}"
 
+  # Loop principale — un client alla volta
   while true:
-    # Attendi connessione client
-    echo "In ascolto porta TCP 5000..."
-    echo "Connettiti con: nc 192.168.0.130 5000"
+    echo fmt"In ascolto porta TCP {eth.port}... (nc -w5 192.168.0.140 5000)"
     while eth.socketStatus() != wz_SOCK_ESTABLISHED:
       sleepMs(10)
     echo "Client connesso!"
 
-    # Attendi comando dal client
+    # Attendi dati
     var rxLen: int32 = 0
     while rxLen <= 0:
-      rxLen = recvDataEth(eth, eth.socket)
+      rxLen = eth.recvDataEth(eth.socket)
       sleepMs(10)
 
-    #[ Converti buffer in stringa
-    var msg = newString(rxLen)
-    for i in 0..<rxLen:
-      msg[i] = eth.rxBuffer[i.int].char
-    msg = msg.strip()
-    echo "Ricevuto: \"", msg, "\""]#
-    var msg = eth.dataToString(rxLen)
+    # Converti e processa comando
+    let msg = eth.dataToString(rxLen)
+    echo fmt"Ricevuto: {msg}"
 
-    # Seleziona risposta
     let risposta =
       if   msg == "ciao":  "buongiorno!\n"
       elif msg == "stato": "tutto ok\n"
+      elif msg == "ver": fmt"Versione Lib: {W5500Version}"
       else:                "comando non riconosciuto\n"
 
-    # Invia risposta e chiudi connessione
-    discard sendDataEth(eth, risposta, eth.socket)
-    echo "Risposto: \"", risposta.strip(), "\""
+    discard eth.sendDataEth(risposta, eth.socket)
+    echo fmt"Risposto: {risposta.strip()}"
 
-    # Disconnetti e riapri socket per il prossimo client
-    #discard wz_disconnect(eth.socket) #non buono va in timeout (32 sec).
-    #sleepMs(100)
+    # Chiudi e riapri per il prossimo client
     discard wz_close(eth.socket)
     sleepMs(100)
-    setSocket(eth)  # riapre socket in listen
+    eth.setSocket()
