@@ -238,14 +238,6 @@ if ver != W5500_VERSIONR:
   echo "SPI error! Check wiring."
   while true: sleepMs(1000)
 
-# Set static IP configuration
-w5500SetNetInfo(
-  mac = [0xDE'u8, 0xAD, 0xBE, 0xEF, 0xFE, 0x01],
-  ip  = [192'u8, 168, 0, 130],
-  sn  = [255'u8, 255, 255, 0],
-  gw  = [192'u8, 168, 0, 1]
-)
-
 while true:
   # Wait for client connection
   while eth.socketStatus() != SOCK_ESTABLISHED:
@@ -288,13 +280,6 @@ import picostdlib
 var eth = w5500Init(spi1, 10_000_000.cuint,
                     10.Gpio, 11.Gpio, 12.Gpio, 13.Gpio,
                     Mode_UDP, 5000)
-
-w5500SetNetInfo(
-  mac = [0xDE'u8, 0xAD, 0xBE, 0xEF, 0xFE, 0x01],
-  ip  = [192'u8, 168, 0, 130],
-  sn  = [255'u8, 255, 255, 0],
-  gw  = [192'u8, 168, 0, 1]
-)
 
 while true:
   let rxLen = recvDataEth(eth, eth.socket)
