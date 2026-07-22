@@ -328,5 +328,5 @@ MIT — see LICENSE file.
 
 ## Author
 
-Martinix / CNR  
-Version 0.3.1
+Martinix75   
+Version 0.3.2
