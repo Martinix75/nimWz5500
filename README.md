@@ -233,7 +233,7 @@ var eth = w5500Init(spi1, 10_000_000.cuint,
                     Mode_TCP, 5000)
 
 # Verify SPI communication
-let ver = w5500ReadVersionRaw(spi1, 13.Gpio)
+let ver = eth.w5500ReadVersionRaw()
 if ver != W5500_VERSIONR:
   echo "SPI error! Check wiring."
   while true: sleepMs(1000)
@@ -246,7 +246,7 @@ while true:
   # Wait for incoming data
   var rxLen: int32 = 0
   while rxLen <= 0:
-    rxLen = recvDataEth(eth, eth.socket)
+    rxLen = eth.recvDataEth(eth.socket)
     sleepMs(10)
 
   # Convert buffer to string (dataToString handles it in one call)
@@ -259,11 +259,11 @@ while true:
     else: "unknown command\n"
 
   # Send response and close connection
-  discard sendDataEth(eth, response, eth.socket)
+  discard eth.sendDataEth(response, eth.socket)
   sleepMs(100)
-  discard wz_close(eth.socket)
+  discard eth.socket.wz_close()
   sleepMs(100)
-  setSocket(eth)  # reopen for next client
+  eth.setSocket()  # reopen for next client
 ```
 
 ---
@@ -282,7 +282,7 @@ var eth = w5500Init(spi1, 10_000_000.cuint,
                     Mode_UDP, 5000)
 
 while true:
-  let rxLen = recvDataEth(eth, eth.socket)
+  let rxLen = eth.recvDataEth(eth.socket)
   if rxLen > 0:
     let msg = eth.dataToString(rxLen)
 
@@ -291,7 +291,7 @@ while true:
       elif msg == "status": "all good\n"
       else: "unknown command\n"
 
-    discard sendDataEth(eth, response, eth.socket)
+    discard eth.sendDataEth(response, eth.socket)
   sleepMs(10)
 ```
 
