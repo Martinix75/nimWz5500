@@ -34,12 +34,12 @@ type
     clientIp: array[4, uint8] #buffer x memorizzare ip del Client.
     clientPort: uint16 #memorizza la porta del client.
     mac*: array[6, uint8] = [0xDE'u8, 0xAD, 0xBE, 0xEF, 0xFE, 0x01] #memorizza ll'indirizzo MAC ver 0.3.4
-    ip*: array[4, uint8] = [192'u8, 168, 0, 1] #memorizza l'inrizzo IP ver 0.3.4 .
+    ip*: array[4, uint8] = [192'u8, 168, 0, 130] #memorizza l'inrizzo IP ver 0.3.4 .
     sn*: array[4, uint8] = [255'u8, 255, 255, 0]#memorizza la maschera di rete ver 0.3.4 .
     gw*: array[4, uint8] = [192'u8, 168, 0, 1] #memorizza il gateway ver 0.3.4 .
 
 const
-  W5500Version*   = "0.3.4" # modifica oggetto.
+  W5500Version*   = "0.3.6" # link up
   SOCK_STREAM*    = wz_Sn_MR_TCP #alias TCP per compattibilita BSD socket.
   SOCK_DGRAM*     = wz_Sn_MR_UDP #alias UDP per compattibilità BSD socket.
   MAX_SOCK_NUM*   = 8.uint8 #numero massimo di socket contemporanei.
@@ -59,11 +59,13 @@ proc w5500CsSelect() {.cdecl.} #abbassa il pin CS (attivo basso) per selezionare
 proc w5500CsDeselect() {.cdecl.} #Alza il pin CS per deselezionare il w5500 dal SPI.
 #proc w5500ReadVersionRaw*(spi: ptr SpiInst; pinCs: Gpio): uint8 #legge il registo versione interno da spi (senza libreria wznet).
 proc w5500ReadVersionRaw*(eth: EthCom): uint8
+proc w5500LinkUp*(eth: EthCom): bool #legge il bit LNK di PHYCFGR (0x002E): true = link fisico su.
 proc w5500HardReset*(eth: EthCom) #soft reser per w5500 senza pin fidico.
 proc w5500Init*(spi: ptr SpiInst; baudrate: cuint; pinSck, pinMosi, pinMiso, pinCs: Gpio; 
                 protocol: EthProtocol; port: uint16; socket: uint8=0; pinRst: GpioOptional = GpioUnused): EthCom #inizializza porta SPI e chip w5500.
 proc sendDataEth*(eth: var EthCom; txBuffer: string; socket: uint8 = 0): int32 #proc nim semplificata per pedire dati ver 0.2.0
 proc recvDataEth*(eth: var EthCom; socket: uint8 = 0): int32 #procedura semplificata Nim per ricevere dati ver 0.2.0.
+proc recvStringEth*(eth: var EthCom): string #ritorna direttamente la stringa ricevuta ver 0.3.5 .
 proc getSn_SR*(sn: uint8): uint8
 proc setSocket*(eth: var EthCom) #setta il sochet da usare UDP o TCP.
 proc socketStatus*(eth: EthCom): uint8 #alias NIM per decretare la connessione corrente del socket ver 0.2.0.
@@ -71,9 +73,23 @@ proc rxBytesAvailable*(eth: EthCom): uint16 #alias NIM per il ritorno dei byte d
 proc w5500Reset*(eth: var EthCom) #reset software per resettare manualmente il w5500 ver 0.3.0
 proc dataToString*(eth: EthCom; data: int32): string  #utilità per la conversione dati grezzi in stringhe ver 0.3.2 .
 proc w5500SetNetInfo*(eth: var EthCom)
+proc isAvailableEth*(eth: EthCom): bool #controlla se ci son dati sul baffer riceziona derti ma torna  solo TRUE o False ver 0.3.5 .
 # ----------- Fine Prototipi di Procedura ----------
 
 # ---------- Inizio Procedure Reali ----------
+proc w5500LinkUp*(eth: EthCom): bool =
+  ## Legge il bit LNK del registro PHYCFGR (indirizzo 0x002E, blocco comune).
+  ## true = link fisico (cavo/switch) su, false = giù.
+  eth.pinCs.put(Low)
+  sleepMs(1)
+  var tx = [0x00.uint8, 0x2E, 0x00]  # addr PHYCFGR, blocco comune, lettura
+  discard eth.spi.writeBlocking(tx[0].addr, 3.csize_t)
+  var rx: uint8 = 0
+  discard eth.spi.readBlocking(0xFF.uint8, rx.addr, 1.csize_t)
+  sleepMs(1)
+  eth.pinCs.put(High)
+  result = (rx and 0x01'u8) != 0
+
 proc w5500SpiReadByte(): uint8 =
   ## Legge un singolo byte dalla SPI.
   ## Trasmette 0xFF come dummy byte (richiesto dal protocollo SPI full-duplex).
@@ -207,6 +223,33 @@ proc setSocket*(eth: var EthCom) =
       discard wz_socket_proc(eth.socket, wz_Sn_MR_TCP, eth.port, 0)
       discard wz_listen(eth.socket)
       
+#[proc w5500SetNetInfo*(mac: array[6, uint8];
+                      ip:  array[4, uint8];
+                      sn:  array[4, uint8];
+                      gw:  array[4, uint8]) =
+  ## Configura i parametri di rete con indirizzo IP statico.
+  ##
+  ## Parametri:
+  ##   mac — indirizzo MAC (6 byte) — deve essere unico nella rete locale
+  ##   ip  — indirizzo IPv4 statico (4 byte)
+  ##   sn  — subnet mask (4 byte)
+  ##   gw  — indirizzo gateway (4 byte)
+  ##
+  ## Esempio:
+  ##   w5500SetNetInfo(
+  ##     mac = [0xDE'u8, 0xAD, 0xBE, 0xEF, 0xFE, 0x01],
+  ##     ip  = [192'u8, 168, 0, 130],
+  ##     sn  = [255'u8, 255, 255, 0],
+  ##     gw  = [192'u8, 168, 0, 1]
+  ##   )
+  var info: wz_wiz_NetInfo
+  info.wz_mac  = mac
+  info.wz_ip   = ip
+  info.wz_sn   = sn
+  info.wz_gw   = gw
+  info.wz_dhcp = wz_NETINFO_STATIC  # modalità IP statico (no DHCP)
+  wz_wizchip_setnetinfo(info.addr)]#
+
 proc w5500SetNetInfo*(eth: var EthCom) =
   ## Applica la configurazione di rete memorizzata nell'oggetto EthCom.
   ## Imposta eth.mac, eth.ip, eth.sn, eth.gw prima di chiamarla.
@@ -217,7 +260,9 @@ proc w5500SetNetInfo*(eth: var EthCom) =
   info.wz_gw   = eth.gw
   info.wz_dhcp = wz_NETINFO_STATIC
   wz_wizchip_setnetinfo(info.addr)
-  
+
+proc isAvailableEth*(eth: EthCom): bool =
+  result = eth.rxBytesAvailable() > 0
   
 proc sendDataEth*(eth: var EthCom; txBuffer: string; socket: uint8 = 0): int32 =
   case eth.protocol:
@@ -230,6 +275,11 @@ proc sendDataEth*(eth: var EthCom; txBuffer: string; socket: uint8 = 0): int32 =
     of Mode_TCP:
         result = wz_send(socket, cast[ptr uint8](txBuffer[0].addr),
                       txBuffer.len().uint16)
+        
+proc recvStringEth*(eth: var EthCom): string =
+  let rxLen = eth.recvDataEth(eth.socket)
+  if rxLen > 0:
+    result = eth.dataToString(rxLen)
 
 proc recvDataEth*(eth: var EthCom; socket: uint8 = 0): int32 =
   case eth.protocol:
@@ -309,7 +359,7 @@ when isMainModule:
   # eth.sn  è già [255, 255, 255, 0] per default
   eth.ip = [192'u8, 168, 0, 140]  # cambio IP da default 0.1 a 0.140
   eth.gw = [192'u8, 168, 0, 1]
-  eth.w5500SetNetInfo() # applica la configurazione sualo SEMPRE!!
+  eth.w5500SetNetInfo()            # applica la configurazione
   echo fmt"Rete: {eth.ip[0]}.{eth.ip[1]}.{eth.ip[2]}.{eth.ip[3]}"
 
   # Loop principale — un client alla volta
