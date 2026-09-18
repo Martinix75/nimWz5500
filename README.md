@@ -196,6 +196,13 @@ Reads the W5500 version register directly via SPI, bypassing the WIZnet library.
 Expected return value: `0x04`. Use this to verify SPI wiring before full initialization.
 
 ```nim
+proc w5500LinkUp*(eth: EthCom): bool
+```
+Reads the physical link status directly from the PHY status register (`PHYCFGR`), bypassing the WIZnet library.
+Returns `true` if the Ethernet cable/switch link is up, `false` otherwise.
+Useful right after `w5500Init` to wait for the physical link before opening a socket — on cold power-up the chip is often ready well before the switch port finishes link negotiation, so opening/listening too early can leave the socket in a stale state that never recovers on its own.
+
+```nim
 proc w5500Reset*(eth: var EthCom)
 ```
 Performs a hardware reset via the RST pin (if connected).
@@ -237,6 +244,13 @@ let ver = eth.w5500ReadVersionRaw()
 if ver != W5500_VERSIONR:
   echo "SPI error! Check wiring."
   while true: sleepMs(1000)
+
+# Wait for the physical link before opening the socket (important on cold power-up)
+var tries = 0
+while not eth.w5500LinkUp() and tries < 100:  # up to ~10s
+  sleepMs(100)
+  inc tries
+eth.setSocket()  # (re)open the socket now that the link is confirmed up
 
 while true:
   # Wait for client connection
