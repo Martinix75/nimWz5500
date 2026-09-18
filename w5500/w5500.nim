@@ -80,15 +80,15 @@ proc isAvailableEth*(eth: EthCom): bool #controlla se ci son dati sul baffer ric
 proc w5500LinkUp*(eth: EthCom): bool =
   ## Legge il bit LNK del registro PHYCFGR (indirizzo 0x002E, blocco comune).
   ## true = link fisico (cavo/switch) su, false = giù.
-  eth.pinCs.put(Low)
+  eth.pinCs.put(Low) #attia spi (w5500)
   sleepMs(1)
   var tx = [0x00.uint8, 0x2E, 0x00]  # addr PHYCFGR, blocco comune, lettura
-  discard eth.spi.writeBlocking(tx[0].addr, 3.csize_t)
+  discard eth.spi.writeBlocking(tx[0].addr, 3.csize_t) #scrive il bloco dati x leggere il registro 0x00 2E
   var rx: uint8 = 0
-  discard eth.spi.readBlocking(0xFF.uint8, rx.addr, 1.csize_t)
+  discard eth.spi.readBlocking(0xFF.uint8, rx.addr, 1.csize_t) #0xff è un bayt di comodo che va mandato x a vere risposta.
   sleepMs(1)
-  eth.pinCs.put(High)
-  result = (rx and 0x01'u8) != 0
+  eth.pinCs.put(High) #disattia spi (w5500)
+  result = (rx and 0x01.uint8) != 0 #se utlimo bit = 0 --> false se =1 --> true
 
 proc w5500SpiReadByte(): uint8 =
   ## Legge un singolo byte dalla SPI.
