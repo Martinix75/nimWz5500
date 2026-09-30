@@ -2,6 +2,7 @@ import std/[strutils, os]
 import futhark
 import picostdlib
 import picostdlib/hardware/[spi, gpio]
+import picostdlib/pico/unique_id #ver 0.3.7
 
 proc renameWiznet(name: string, kind: SymbolKind, partOf: string, overloading: var bool): string =
   #if kind == nskProc:
@@ -19,6 +20,8 @@ importc:
   "socket.h"
 
 type
+  MacAddr* = array[6, uint8] #ver 0.3.7 array contenete mac adress.
+
   EthProtocol* = enum #scelta protocollod a usare
     Mode_UDP, Mode_TCP
     
@@ -33,13 +36,13 @@ type
     rxBuffer*: array[64, uint8] #crea un buffer per memorizzare i dati
     clientIp: array[4, uint8] #buffer x memorizzare ip del Client.
     clientPort: uint16 #memorizza la porta del client.
-    mac*: array[6, uint8] = [0xDE'u8, 0xAD, 0xBE, 0xEF, 0xFE, 0x01] #memorizza ll'indirizzo MAC ver 0.3.4
+    mac*: MacAddr # array[6, uint8] = [0xDE'u8, 0xAD, 0xBE, 0xEF, 0xFE, 0x01] #memorizza ll'indirizzo MAC ver 0.3.4
     ip*: array[4, uint8] = [192'u8, 168, 0, 130] #memorizza l'inrizzo IP ver 0.3.4 .
     sn*: array[4, uint8] = [255'u8, 255, 255, 0]#memorizza la maschera di rete ver 0.3.4 .
     gw*: array[4, uint8] = [192'u8, 168, 0, 1] #memorizza il gateway ver 0.3.4 .
 
 const
-  W5500Version*   = "0.3.6" # link up
+  W5500Version*   = "0.3.7" # mac adress univoco (inventato) dinamico non piu fisso
   SOCK_STREAM*    = wz_Sn_MR_TCP #alias TCP per compattibilita BSD socket.
   SOCK_DGRAM*     = wz_Sn_MR_UDP #alias UDP per compattibilità BSD socket.
   MAX_SOCK_NUM*   = 8.uint8 #numero massimo di socket contemporanei.
@@ -61,8 +64,6 @@ proc w5500CsDeselect() {.cdecl.} #Alza il pin CS per deselezionare il w5500 dal 
 proc w5500ReadVersionRaw*(eth: EthCom): uint8
 proc w5500LinkUp*(eth: EthCom): bool #legge il bit LNK di PHYCFGR (0x002E): true = link fisico su.
 proc w5500HardReset*(eth: EthCom) #soft reser per w5500 senza pin fidico.
-proc w5500Init*(spi: ptr SpiInst; baudrate: cuint; pinSck, pinMosi, pinMiso, pinCs: Gpio; 
-                protocol: EthProtocol; port: uint16; socket: uint8=0; pinRst: GpioOptional = GpioUnused): EthCom #inizializza porta SPI e chip w5500.
 proc sendDataEth*(eth: var EthCom; txBuffer: string; socket: uint8 = 0): int32 #proc nim semplificata per pedire dati ver 0.2.0
 proc recvDataEth*(eth: var EthCom; socket: uint8 = 0): int32 #procedura semplificata Nim per ricevere dati ver 0.2.0.
 proc recvStringEth*(eth: var EthCom): string #ritorna direttamente la stringa ricevuta ver 0.3.5 .
@@ -74,9 +75,20 @@ proc w5500Reset*(eth: var EthCom) #reset software per resettare manualmente il w
 proc dataToString*(eth: EthCom; data: int32): string  #utilità per la conversione dati grezzi in stringhe ver 0.3.2 .
 proc w5500SetNetInfo*(eth: var EthCom)
 proc isAvailableEth*(eth: EthCom): bool #controlla se ci son dati sul baffer riceziona derti ma torna  solo TRUE o False ver 0.3.5 .
+proc defaultMac(): MacAddr #calcola un macadess univoco x ogni schda rp2030 ver 0.3.7
+proc w5500Init*(spi: ptr SpiInst; baudrate: cuint; pinSck, pinMosi, pinMiso, pinCs: Gpio;
+                protocol: EthProtocol; port: uint16; socket: uint8=0; pinRst: GpioOptional = GpioUnused;
+                mac: MacAddr = defaultMac()): EthCom  #modificato (aggiunto mac adress) in ver 0.3.7  inizializza porta SPI e chip w5500.
 # ----------- Fine Prototipi di Procedura ----------
 
 # ---------- Inizio Procedure Reali ----------
+proc defaultMac(): MacAddr = #calcola un macadess univoco x ogni schda rp2030 ver 0.3.7
+  var bid: UniqueBoardId
+  get(addr bid)                    # se nel modulo si chiama `get`
+  result[0] = 0x02                 # locale + unicast
+  for i in 1..5:
+    result[i] = bid.id[i + 2]      # usa gli ultimi byte dell'ID
+
 proc w5500LinkUp*(eth: EthCom): bool =
   ## Legge il bit LNK del registro PHYCFGR (indirizzo 0x002E, blocco comune).
   ## true = link fisico (cavo/switch) su, false = giù.
@@ -177,7 +189,8 @@ proc w5500HardReset*(eth: EthCom) =
   sleepMs(200)  # attesa reset completo (datasheet dice 1ms, mettiamo 200 per sicurezza)
 
 proc w5500Init*(spi: ptr SpiInst; baudrate: cuint; pinSck, pinMosi, pinMiso, pinCs: Gpio; 
-                protocol: EthProtocol; port: uint16; socket: uint8=0; pinRst: GpioOptional = GpioUnused): EthCom =
+                protocol: EthProtocol; port: uint16; socket: uint8=0; pinRst: GpioOptional = GpioUnused;
+                mac: MacAddr = defaultMac()): EthCom = #modificato (aggiunto mac adress) in ver 0.3.7
   comSpi   = spi
   comPinCs = pinCs
   if pinRst != GpioUnused: #se stai usando il reset....
@@ -212,7 +225,7 @@ proc w5500Init*(spi: ptr SpiInst; baudrate: cuint; pinSck, pinMosi, pinMiso, pin
   var rxBufSize: array[8, uint8] = [2.uint8, 2, 2, 2, 2, 2, 2, 2]
   discard wz_wizchip_init(txBufSize[0].addr, rxBufSize[0].addr)
   result = EthCom(spi: spi, baudrate: baudrate, pinSck: pinSck, pinMosi: pinMosi, pinMiso: pinMiso, pinCs: pinCs,
-                  protocol: protocol, port: port, socket: socket, pinRst: pinRst)
+                  protocol: protocol, port: port, socket: socket, pinRst: pinRst, mac: mac)
   setSocket(result)
 
 proc setSocket*(eth: var EthCom) =
@@ -355,7 +368,6 @@ when isMainModule:
   echo "SPI OK."
 
   # Configura rete — modifica solo i campi che vuoi cambiare
-  # eth.mac è già [0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x01] per default
   # eth.sn  è già [255, 255, 255, 0] per default
   eth.ip = [192'u8, 168, 0, 140]  # cambio IP da default 0.1 a 0.140
   eth.gw = [192'u8, 168, 0, 1]
